@@ -1,0 +1,35 @@
+﻿# --- Environment / secrets ---
+.env
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+.eggs/
+
+# --- Testing ---
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Data (seeded corpus, kept out unless small) ---
+data/images/*
+!data/images/.gitkeep
+
+# --- IDE ---
+.vscode/
+.idea/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Alembic ---
+*.sqlite3
+*.db
