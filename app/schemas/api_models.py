@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 CallType = Literal["VISION_CLASSIFY", "EMBEDDING"]
 JobType = Literal["CLASSIFICATION", "EMBEDDING"]
 JobStatus = Literal["pending", "running", "completed", "failed", "indexed"]
-ImageStatus = Literal["pending", "completed", "failed"]
+ImageStatus = Literal["pending", "completed", "failed", "indexed"]
 Decision = Literal["ACCEPTED", "REJECTED", "NO_MATCH"]
 SuggestionSource = Literal["GUARD", "MANUAL_OVERRIDE"]
 ReviewStatus = Literal["PENDING", "APPROVED", "REJECTED"]
