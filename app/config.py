@@ -58,18 +58,31 @@ class Settings(BaseSettings):
     def async_database_url(self) -> str:
         """
         Neon (and most Postgres hosts) hand out a plain `postgresql://`
-        connection string. SQLAlchemy's async engine needs the driver
-        named explicitly: `postgresql+asyncpg://`. We convert here in
-        code rather than asking the user to hand-edit .env, so the
-        .env value can always be pasted directly from the Neon
-        dashboard without modification.
+        connection string with `?sslmode=require` in the query string —
+        that's the psycopg2-style SSL parameter. SQLAlchemy's async
+        engine needs the driver named explicitly (`postgresql+asyncpg://`),
+        and asyncpg does NOT accept `sslmode` as a query param at all
+        (it raises TypeError: connect() got an unexpected keyword
+        argument 'sslmode'). asyncpg wants SSL configured separately via
+        a `connect_args={"ssl": ...}` kwarg on create_async_engine
+        instead (see app/db/session.py and migrations/env.py).
+
+        So here we both swap the driver prefix AND strip `sslmode`
+        (and any other querystring) from the URL, since asyncpg doesn't
+        need it there. We convert here in code rather than asking the
+        user to hand-edit .env, so the .env value can always be pasted
+        directly from the Neon dashboard without modification.
         """
         url = self.DATABASE_URL
         if url.startswith("postgresql://"):
-            return url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        if url.startswith("postgres://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgres://"):
             # Some providers (e.g. Heroku-style) use the short form.
-            return url.replace("postgres://", "postgresql+asyncpg://", 1)
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+
+        # Strip the query string (e.g. ?sslmode=require) — asyncpg gets
+        # its SSL setting from connect_args instead, not the URL.
+        url = url.split("?", 1)[0]
         return url
 
 

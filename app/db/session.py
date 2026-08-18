@@ -32,6 +32,9 @@ engine = create_async_engine(
     settings.async_database_url,
     echo=(settings.LOG_LEVEL.upper() == "DEBUG"),
     pool_pre_ping=True,  # detects stale connections after Neon auto-suspend (§27 risk)
+    # asyncpg takes SSL as a connect kwarg, not a URL query param —
+    # see the long comment on Settings.async_database_url for why.
+    connect_args={"ssl": "require"},
 )
 
 AsyncSessionLocal = async_sessionmaker(
