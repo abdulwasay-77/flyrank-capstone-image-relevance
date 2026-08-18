@@ -10,7 +10,7 @@ letting us test anything real.
 
 from fastapi import FastAPI
 
-from app.routers import images
+from app.routers import images, jobs
 
 app = FastAPI(
     title="FlyRank Capstone — Image Relevance Suggestion Engine",
@@ -19,6 +19,7 @@ app = FastAPI(
 )
 
 app.include_router(images.router)
+app.include_router(jobs.router)
 
 
 @app.get("/health", tags=["ops"])

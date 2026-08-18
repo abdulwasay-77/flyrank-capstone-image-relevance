@@ -15,10 +15,11 @@ Endpoints implemented (§10.1):
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.jobs.classification_job import run_classification_job
 from app.schemas.api_models import ClassifyBatchResponse, ImageDetailOut, ImageOut
 from app.services.image_service import ImageNotFoundError, ImageService
 
@@ -44,6 +45,7 @@ async def get_image(image_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> 
 
 @router.post("/classify-batch", response_model=ClassifyBatchResponse)
 async def classify_batch(
+    background_tasks: BackgroundTasks,
     force: bool = Query(
         default=False,
         description="Reprocess images already classified as completed (§14.4).",
@@ -53,10 +55,14 @@ async def classify_batch(
     """
     Trigger the classification batch job (§10.1, §14.1).
 
-    Returns immediately with a job_id and status="pending". Actual
-    vision-model processing happens asynchronously - wiring that up
-    to FastAPI's BackgroundTasks and app/jobs/classification_job.py
-    is the next piece of work (VisionService hasn't been built yet).
+    Returns immediately with a job_id and status="pending". The actual
+    vision-model processing runs in a FastAPI BackgroundTask
+    (app.jobs.classification_job.run_classification_job), which opens
+    its own database sessions rather than reusing this request's —
+    a BackgroundTask executes after the response is sent, by which
+    point this request's `db` session is closed.
     """
     service = ImageService(db)
-    return await service.start_classification_batch(force=force)
+    response = await service.start_classification_batch(force=force)
+    background_tasks.add_task(run_classification_job, response.job_id, force)
+    return response
