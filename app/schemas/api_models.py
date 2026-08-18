@@ -56,14 +56,22 @@ class ImageMetadataOut(BaseModel):
 class ImageOut(BaseModel):
     """GET /images list item, and the base of GET /images/{id}."""
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: uuid.UUID
     filename: str
     source_url: str | None = None
     license: str
     created_at: datetime
-    metadata: ImageMetadataOut | None = None
+    # SQLAlchemy reserves the attribute name `metadata` on every ORM
+    # model (it's the schema registry object) — that's why the
+    # relationship in app/db/models.py is named `metadata_row`, not
+    # `metadata`. validation_alias tells Pydantic to actually read
+    # img.metadata_row when populating this field from an ORM
+    # instance, while the API's JSON response still uses the field
+    # name "metadata" — the public contract is unaffected, only the
+    # ORM-attribute lookup changes.
+    metadata: ImageMetadataOut | None = Field(default=None, validation_alias="metadata_row")
 
 
 class ImageDetailOut(ImageOut):
