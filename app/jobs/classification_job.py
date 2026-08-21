@@ -28,6 +28,7 @@ from sqlalchemy import select
 from app.db.models import BatchJob, Image
 from app.db.session import AsyncSessionLocal
 from app.repositories.image_repository import ImageRepository
+from app.services.embedding_service import EmbeddingService
 from app.services.vision_service import VisionClassificationFailed, VisionService
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -77,6 +78,20 @@ async def _classify_one(image_id: uuid.UUID, filename: str, semaphore: asyncio.S
                 # VisionService) still counts as a per-image failure,
                 # not a batch-ending crash.
                 return "failed"
+
+            # Embed the caption immediately after a successful
+            # classification — matching (§12) requires image_vectors
+            # to exist for every candidate, and the caption (the text
+            # we embed, per §12.1) only exists once classification has
+            # produced one. Embedding failure does NOT downgrade a
+            # successful classification to "failed": the image_metadata
+            # row is already correctly persisted; it just won't be
+            # matchable until re-embedded (e.g. via a future retry
+            # mechanism, or by re-running this job with force=true).
+            try:
+                await EmbeddingService(db).embed_image(image_id, tags.caption)
+            except Exception:
+                pass
 
             return "flagged" if tags.confidence < vision.guard_config.confidence_flag_threshold else "succeeded"
 

@@ -51,7 +51,8 @@ MODEL_NAME = "gemini-3.5-flash-lite"
 # network-call level, since they're a transient infrastructure
 # condition, not a "the model produced bad output" condition. Retrying
 # a 429 does not consume one of the schema-validation retry attempts.
-RATE_LIMIT_MAX_RETRIES = 5
+RATE_LIMIT_MAX_RETRIES = 3  # reduced from 5 — see embedding_service.py's
+# identical constant for the incident that motivated this (BUILDLOG.md).
 RATE_LIMIT_BASE_DELAY_SECONDS = 8.0
 
 PROMPT_VERSION = "v1"

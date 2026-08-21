@@ -32,9 +32,36 @@ engine = create_async_engine(
     settings.async_database_url,
     echo=(settings.LOG_LEVEL.upper() == "DEBUG"),
     pool_pre_ping=True,  # detects stale connections after Neon auto-suspend (§27 risk)
-    # asyncpg takes SSL as a connect kwarg, not a URL query param —
-    # see the long comment on Settings.async_database_url for why.
-    connect_args={"ssl": "require"},
+    pool_timeout=10,  # max seconds to wait for a free connection from the pool
+    connect_args={
+        # asyncpg takes SSL as a connect kwarg, not a URL query param —
+        # see the long comment on Settings.async_database_url for why.
+        "ssl": "require",
+        # Disables asyncpg's server-side prepared statement caching.
+        # Root cause of a real, hard-to-diagnose incident: Neon's
+        # pooled connection endpoint uses PgBouncer in transaction
+        # pooling mode, which is NOT compatible with asyncpg's default
+        # behavior of preparing statements server-side — a pooled
+        # connection can hand different transactions to different
+        # backend processes, breaking prepared-statement reuse. This
+        # manifested as parameterized queries (anything with a WHERE
+        # clause bound value) hanging indefinitely on bind_execute,
+        # while simple unparameterized lookups mostly worked. Confirmed
+        # via scripts/debug_suggestions.py isolating the exact failing
+        # query and traceback line. See BUILDLOG.md.
+        "statement_cache_size": 0,
+        # Raised from 30s to 60s based on hard evidence: a raw
+        # asyncpg test (scripts/debug_raw_asyncpg.py), with zero
+        # SQLAlchemy involved, measured this exact join query taking
+        # ~30 seconds to complete — successfully, not stuck. Root
+        # cause: this project's Neon database is in us-east-2 (Ohio)
+        # while requests are made from Pakistan, and each of the ~50
+        # rows returned includes a large embedding vector (thousands
+        # of floats) — the transfer time over that physical distance
+        # is real, not a bug. 60s gives comfortable headroom above
+        # the measured ~30s. See BUILDLOG.md.
+        "command_timeout": 60,
+    },
 )
 
 AsyncSessionLocal = async_sessionmaker(
