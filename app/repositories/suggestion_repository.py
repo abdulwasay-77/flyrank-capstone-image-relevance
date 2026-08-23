@@ -49,14 +49,13 @@ class SuggestionRepository:
         )
         return result.scalar_one_or_none()
 
-    async def list_for_post_with_filenames(self, post_id: uuid.UUID) -> list[tuple[Suggestion, str | None]]:
+    async def get_candidates_considered(self, post_id: uuid.UUID) -> list[tuple[Suggestion, str | None]]:
         """
-        All suggestion rows for a post, each paired with its image's
-        filename (via a left join — image_id is nullable for NO_MATCH
-        rows, so filename is None in that case). This is what powers
-        the "reuse existing decision trail" path in PostService,
-        where RejectedCandidateOut/TopSuggestionOut need a real
-        filename, not just an image_id.
+        All suggestion rows for the same post_id, paired with each
+        image's filename via left join (image_id is nullable for
+        NO_MATCH rows). This is the "full decision trail" FR-5.5
+        requires — every candidate the guard actually evaluated for
+        this post, not just the winner.
         """
         result = await self.db.execute(
             select(Suggestion, Image.filename)

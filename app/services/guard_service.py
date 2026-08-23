@@ -33,7 +33,7 @@ class GuardDecision:
 
 def evaluate(
     ranked_candidates: list[MatchCandidate],
-    post_category: str | None,
+    post_categories: list[str],
     guard_config: GuardConfig,
 ) -> list[GuardDecision]:
     """
@@ -42,8 +42,15 @@ def evaluate(
     §13.1's `break` behavior exactly, since candidates ranked below an
     accepted one are never evaluated by design, not omitted by
     accident.
+
+    post_categories is a small ranked list (see
+    MatchingService.infer_post_category) rather than a single string —
+    a candidate's category "matches" if it appears anywhere in this
+    list, not only if it equals the single top-ranked category. This
+    keeps the guard robust to posts that legitimately straddle two
+    close categories, while still rejecting genuinely unrelated ones.
     """
-    if post_category is None:
+    if not post_categories:
         # Conservative fallback (documented in
         # MatchingService.infer_post_category): if the corpus has no
         # classified images yet, there is no vocabulary to infer a
@@ -60,16 +67,17 @@ def evaluate(
         ]
 
     decisions: list[GuardDecision] = []
+    expected_label = " or ".join(post_categories)
 
     for candidate in ranked_candidates:
-        category_match = candidate.category == post_category
+        category_match = candidate.category in post_categories
 
         if not category_match:
             decisions.append(
                 GuardDecision(
                     candidate=candidate,
                     decision="REJECTED",
-                    reason=f"Category mismatch: expected {post_category}, detected {candidate.category}",
+                    reason=f"Category mismatch: expected {expected_label}, detected {candidate.category}",
                     category_match=False,
                 )
             )
@@ -108,7 +116,7 @@ def evaluate(
                 candidate=candidate,
                 decision="ACCEPTED",
                 reason=(
-                    f"Category match ({post_category}); similarity {candidate.similarity_score:.2f} >= "
+                    f"Category match ({candidate.category}); similarity {candidate.similarity_score:.2f} >= "
                     f"{guard_config.similarity_threshold:.2f}; confidence {candidate.confidence:.2f} >= "
                     f"{guard_config.confidence_accept_threshold:.2f}"
                 ),

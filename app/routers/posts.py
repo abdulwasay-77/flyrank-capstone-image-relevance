@@ -10,8 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.schemas.api_models import PostOut, PostSuggestionsOut
+from app.schemas.api_models import OverrideRequest, PostOut, PostSuggestionsOut, SuggestionOut
 from app.services.post_service import PostNotFoundError, PostService
+from app.services.review_service import ReviewService
 
 router = APIRouter(prefix="/posts", tags=["posts"])
 
@@ -75,3 +76,24 @@ async def get_post_suggestions(post_id: uuid.UUID, db: AsyncSession = Depends(ge
                 "Please wait a minute and try again."
             ),
         )
+
+
+@router.post("/{post_id}/override", response_model=SuggestionOut)
+async def override_suggestion(
+    post_id: uuid.UUID, body: OverrideRequest, db: AsyncSession = Depends(get_db)
+) -> SuggestionOut:
+    """
+    FR-5.4 / §15.2: a reviewer manually assigns a different image than
+    the guard suggested. Does not touch or delete any existing
+    guard-originated suggestion row — creates a new one with
+    source=MANUAL_OVERRIDE, always distinguishable from an automated
+    acceptance.
+    """
+    post_service = PostService(db)
+    post = await post_service.repo.get_by_id(post_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail=f"Post {post_id} not found")
+
+    review_service = ReviewService(db)
+    suggestion = await review_service.create_override(post_id, body.image_id, body.note)
+    return SuggestionOut.model_validate(suggestion)

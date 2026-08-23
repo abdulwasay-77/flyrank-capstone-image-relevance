@@ -87,31 +87,47 @@ class MatchingService:
         candidates.sort(key=lambda c: c.similarity_score, reverse=True)
         return candidates
 
-    async def infer_post_category(self, post_vector: list[float]) -> str | None:
+    async def infer_post_category(self, post_vector: list[float], top_k: int = 2) -> list[str]:
         """
-        §13.2: derives the post's expected category via embedding
-        similarity against the corpus's own category vocabulary.
-        Returns None if the corpus has no classified images yet
-        (nothing to compare against) — the caller (GuardService via
-        PostService) treats that as "cannot determine a category",
-        which should conservatively fail every candidate's category
-        check rather than guess.
+        §13.2: derives the post's expected category (or categories)
+        via embedding similarity against the corpus's own category
+        vocabulary. Returns the top `top_k` closest categories, not
+        just the single best match.
+
+        Why top-k, not top-1: a post can legitimately straddle two
+        close categories (e.g. a wolf-in-the-forest post sits close
+        to both "animal" and "nature" in embedding space). A strict
+        top-1 winner is fragile — small embedding variance between
+        runs (e.g. the in-process category-embedding cache in
+        matching_service.py being rebuilt after a server restart) can
+        flip which single category "wins", producing a different
+        guard outcome for the exact same post text on different runs.
+        That's a real reproducibility problem, not just a theoretical
+        one — observed directly during testing (see BUILDLOG.md).
+        Returning the top few candidates and letting the guard accept
+        a category-match against ANY of them keeps the guard's
+        rejection power (still refuses "food", "electronics", etc.
+        for an animal post) while not being fragile to near-ties
+        between genuinely related categories.
+
+        Returns an empty list if the corpus has no classified images
+        yet — the caller treats that as "cannot determine a
+        category", which should conservatively fail every candidate's
+        category check rather than guess.
         """
         result = await self.db.execute(
             select(ImageMetadata.category).where(ImageMetadata.status == "completed").distinct()
         )
         categories = [row[0] for row in result.all()]
         if not categories:
-            return None
+            return []
 
-        best_category: str | None = None
-        best_score = -1.0
+        scored: list[tuple[str, float]] = []
         for category in categories:
             if category not in _category_embedding_cache:
                 _category_embedding_cache[category] = await self.embedding_service.embed_label_text(category)
             score = cosine_similarity(post_vector, _category_embedding_cache[category])
-            if score > best_score:
-                best_score = score
-                best_category = category
+            scored.append((category, score))
 
-        return best_category
+        scored.sort(key=lambda pair: pair[1], reverse=True)
+        return [category for category, _ in scored[:top_k]]
