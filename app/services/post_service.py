@@ -72,7 +72,7 @@ class PostService:
 
         existing = await self.suggestion_repo.get_latest_for_post(post_id)
         if existing is not None:
-            rows = await self.suggestion_repo.list_for_post_with_filenames(post_id)
+            rows = await self.suggestion_repo.get_candidates_considered(post_id)
             return self._build_response_from_existing_rows(post_id, post.title, rows)
 
         post_vector = await self._ensure_post_embedding(post_id, post.title, post.body)
