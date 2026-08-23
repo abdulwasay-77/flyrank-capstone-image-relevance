@@ -8,9 +8,13 @@ bodies, since an empty router only adds import surface without
 letting us test anything real.
 """
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.routers import images, jobs, posts, suggestions
+from app.db.session import get_db
+from app.routers import costs, images, jobs, posts, suggestions
+from app.schemas.api_models import HealthOut
 
 app = FastAPI(
     title="FlyRank Capstone — Image Relevance Suggestion Engine",
@@ -22,16 +26,19 @@ app.include_router(images.router)
 app.include_router(jobs.router)
 app.include_router(posts.router)
 app.include_router(suggestions.router)
+app.include_router(costs.router)
 
 
-@app.get("/health", tags=["ops"])
-async def health() -> dict:
+@app.get("/health", tags=["ops"], response_model=HealthOut)
+async def health(db: AsyncSession = Depends(get_db)) -> HealthOut:
     """
-    Liveness/readiness check (§10.5).
-
-    Deliberately minimal for now — returns process-level health only.
-    A DB-connectivity check (matching HealthOut.database in
-    api_models.py) gets added once app/routers/costs.py is built and
-    we wire a real get_db() call through this endpoint too.
+    Liveness/readiness check (§10.5). Now checks real DB connectivity
+    (a trivial SELECT 1) rather than just process liveness — a
+    server that's "up" but can't reach Neon should report that
+    honestly, not claim full health.
     """
-    return {"status": "ok"}
+    try:
+        await db.execute(text("SELECT 1"))
+        return HealthOut(status="ok", database="connected")
+    except Exception:
+        return HealthOut(status="ok", database="unreachable")

@@ -18,7 +18,9 @@ PRICING_USD_PER_1M_TOKENS and note the date in a comment.
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
+from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AICallLog
@@ -149,3 +151,50 @@ class CostTrackerService:
                 output_tokens=ctx.get("output_tokens", 0),
                 reference_id=reference_id,
             )
+
+    async def get_summary(
+        self, window_start: datetime | None = None, window_end: datetime | None = None
+    ) -> dict:
+        """
+        §16 / §10.5: aggregates ai_call_log by call_type, optionally
+        bounded by a time window. Returns a plain dict shaped to match
+        CostSummaryOut exactly — kept as a dict here (not the Pydantic
+        model itself) so this service stays free of any dependency on
+        the API schema layer (§7.1's "swappable independently").
+        """
+        query = select(
+            AICallLog.call_type,
+            func.count().label("call_count"),
+            func.coalesce(func.sum(AICallLog.estimated_cost_usd), 0).label("total_cost_usd"),
+            func.sum(func.cast(AICallLog.success, Integer)).label("success_count"),
+        )
+        if window_start is not None:
+            query = query.where(AICallLog.created_at >= window_start)
+        if window_end is not None:
+            query = query.where(AICallLog.created_at <= window_end)
+        query = query.group_by(AICallLog.call_type)
+
+        result = await self.db.execute(query)
+        rows = result.all()
+
+        by_call_type = []
+        total_cost = 0.0
+        for call_type, call_count, total_cost_usd, success_count in rows:
+            success_count = success_count or 0
+            by_call_type.append(
+                {
+                    "call_type": call_type,
+                    "call_count": call_count,
+                    "total_cost_usd": float(total_cost_usd),
+                    "success_count": success_count,
+                    "failure_count": call_count - success_count,
+                }
+            )
+            total_cost += float(total_cost_usd)
+
+        return {
+            "window_start": window_start,
+            "window_end": window_end,
+            "total_cost_usd": total_cost,
+            "by_call_type": by_call_type,
+        }
