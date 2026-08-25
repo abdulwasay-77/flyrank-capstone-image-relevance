@@ -1,0 +1,12 @@
+run: "uvicorn app.main:app --reload"
+seed: "python scripts/seed_corpus.py && python scripts/seed_db.py"
+test: "pytest"
+base_url: "http://localhost:8000"
+endpoints:
+  - "GET /images"
+  - "POST /images/classify-batch"
+  - "GET /posts/{id}/suggestions"
+  - "POST /suggestions/{id}/approve"
+  - "POST /suggestions/{id}/reject"
+  - "POST /posts/{id}/override"
+  - "GET /costs/summary"
