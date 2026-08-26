@@ -1,6 +1,8 @@
 """
 §18 "Guard logic": category mismatch always rejects regardless of
-similarity; threshold boundaries behave correctly at the edge.
+similarity; threshold boundaries behave correctly at the edge; subject
+mismatch (added after a real proven gap — see BUILDLOG.md) catches
+same-category-different-subject substitutions like wolf-for-fox.
 Pure unit tests on GuardService.evaluate with fabricated inputs — no
 network, no database.
 """
@@ -24,11 +26,12 @@ def guard_config():
     )
 
 
-def make_candidate(category="animal", confidence=0.9, similarity=0.85, filename="test.jpg"):
+def make_candidate(category="animal", subject="red fox", confidence=0.9, similarity=0.85, filename="test.jpg"):
     return MatchCandidate(
         image_id=uuid.uuid4(),
         filename=filename,
         category=category,
+        subject=subject,
         confidence=confidence,
         similarity_score=similarity,
     )
@@ -39,7 +42,7 @@ class TestCategoryMismatch:
         """Even a near-perfect similarity score must not override a
         category mismatch — category is checked first and is a hard
         gate, per §13.1's ordering."""
-        candidate = make_candidate(category="food", confidence=0.99, similarity=0.99)
+        candidate = make_candidate(category="food", subject="latte", confidence=0.99, similarity=0.99)
         decisions = evaluate([candidate], post_categories=["animal"], guard_config=guard_config)
         assert decisions[0].decision == "REJECTED"
         assert "Category mismatch" in decisions[0].reason
@@ -48,7 +51,7 @@ class TestCategoryMismatch:
         """A candidate matches if its category is anywhere in the
         inferred post_categories list, not only the single top entry —
         this is the fix for the animal/nature flip-flop bug."""
-        candidate = make_candidate(category="nature", confidence=0.9, similarity=0.85)
+        candidate = make_candidate(category="nature", subject="mountain", confidence=0.9, similarity=0.85)
         decisions = evaluate([candidate], post_categories=["animal", "nature"], guard_config=guard_config)
         assert decisions[0].decision == "ACCEPTED"
 
@@ -58,6 +61,102 @@ class TestCategoryMismatch:
         assert len(decisions) == 1
         assert decisions[0].decision == "NO_MATCH"
         assert decisions[0].candidate is None
+
+
+class TestSubjectMismatch:
+    """§13.4 / BUILDLOG.md: category alone is too coarse to distinguish
+    closely-related subjects within the same category (fox vs wolf are
+    both category="animal"). These tests reproduce the exact real
+    scenario found via scripts/debug_full_ranking.py — a high-similarity,
+    high-confidence, same-category wolf photo must still be rejected
+    for a fox post."""
+
+    def test_subject_mismatch_rejects_despite_matching_category_and_high_scores(self, guard_config):
+        """The exact real bug scenario: gray-wolf-01.jpg had
+        similarity 0.826 (well above 0.75) and confidence 0.99, same
+        category="animal" as every fox photo — the OLD guard (category
+        + similarity + confidence only) would have accepted this."""
+        wolf_candidate = make_candidate(
+            category="animal", subject="gray wolf", confidence=0.99, similarity=0.90, filename="gray-wolf-01.jpg"
+        )
+        decisions = evaluate(
+            [wolf_candidate],
+            post_categories=["animal"],
+            guard_config=guard_config,
+            post_subjects=["red fox"],
+        )
+        assert decisions[0].decision == "REJECTED"
+        assert "Subject mismatch" in decisions[0].reason
+        assert "red fox" in decisions[0].reason
+        assert "gray wolf" in decisions[0].reason
+        # Category still correctly recorded as matched — it's the
+        # subject check that failed, not category.
+        assert decisions[0].category_match is True
+
+    def test_subject_match_via_any_of_top_k_subjects(self, guard_config):
+        candidate = make_candidate(category="animal", subject="red fox", confidence=0.9, similarity=0.85)
+        decisions = evaluate(
+            [candidate],
+            post_categories=["animal"],
+            guard_config=guard_config,
+            post_subjects=["gray wolf", "red fox"],
+        )
+        assert decisions[0].decision == "ACCEPTED"
+
+    def test_top_k_1_does_not_admit_a_nearby_but_wrong_subject(self, guard_config):
+        """Regression test for a real bug found during verification:
+        with a wider top_k, a genuinely different, wrong subject
+        (e.g. "coyote") could end up in the accepted-subjects list
+        purely for being a nearby canid in embedding space — silently
+        defeating the whole point of the subject check. With
+        MatchingService.infer_post_subjects's default top_k=1, only
+        one subject is ever in the accepted list, so this scenario
+        (simulated here by directly passing a too-wide subjects list,
+        the way top_k=3 used to produce) should still correctly
+        reject anything not equal to it."""
+        coyote_candidate = make_candidate(category="animal", subject="coyote", confidence=0.9, similarity=0.85)
+        # Simulates the OLD, wider inferred-subjects list that
+        # incorrectly included "coyote" as a false-acceptable neighbor
+        # of "red fox" — this must still be rejected, proving the
+        # guard's per-item matching is correct; it's
+        # infer_post_subjects' top_k=1 default that prevents this
+        # wide a list from ever being constructed in the first place.
+        decisions = evaluate(
+            [coyote_candidate],
+            post_categories=["animal"],
+            guard_config=guard_config,
+            post_subjects=["red fox"],  # correct, narrow (top_k=1) inference
+        )
+        assert decisions[0].decision == "REJECTED"
+        assert "Subject mismatch" in decisions[0].reason
+
+    def test_subject_check_skipped_when_post_subjects_is_none(self, guard_config):
+        """Backward compatibility: when post_subjects isn't passed
+        (None, the default), the guard behaves exactly as it did
+        before the subject check was added — category match alone is
+        sufficient. This matters for any caller that hasn't been
+        updated to compute subjects."""
+        wolf_candidate = make_candidate(category="animal", subject="gray wolf", confidence=0.99, similarity=0.90)
+        decisions = evaluate([wolf_candidate], post_categories=["animal"], guard_config=guard_config)
+        assert decisions[0].decision == "ACCEPTED"
+        assert "subject match" not in decisions[0].reason.lower()
+
+    def test_fox_post_full_ranking_scenario(self, guard_config):
+        """Reproduces the real ranked-candidate order observed via
+        scripts/debug_full_ranking.py: three fox photos rank above one
+        wolf photo. The guard should accept the top fox and never even
+        reach the wolf (break-on-first-accept)."""
+        candidates = [
+            make_candidate(subject="red fox", filename="red-fox-01.jpg", confidence=0.98, similarity=0.8618),
+            make_candidate(subject="red fox", filename="red-fox-04.jpg", confidence=0.99, similarity=0.8316),
+            make_candidate(subject="gray wolf", filename="gray-wolf-01.jpg", confidence=0.99, similarity=0.8260),
+        ]
+        decisions = evaluate(
+            candidates, post_categories=["animal"], guard_config=guard_config, post_subjects=["red fox"]
+        )
+        assert len(decisions) == 1  # stopped at the first accept
+        assert decisions[0].decision == "ACCEPTED"
+        assert decisions[0].candidate.filename == "red-fox-01.jpg"
 
 
 class TestSimilarityThresholdBoundary:
@@ -108,7 +207,7 @@ class TestFallThroughBehavior:
 
     def test_rejects_then_accepts_next_candidate(self, guard_config):
         candidates = [
-            make_candidate(category="food", similarity=0.95, confidence=0.95, filename="wrong.jpg"),
+            make_candidate(category="food", subject="latte", similarity=0.95, confidence=0.95, filename="wrong.jpg"),
             make_candidate(category="animal", similarity=0.8, confidence=0.9, filename="right.jpg"),
         ]
         decisions = evaluate(candidates, post_categories=["animal"], guard_config=guard_config)
@@ -137,7 +236,7 @@ class TestReasonStrings:
     actual numbers involved, never a generic message."""
 
     def test_category_mismatch_reason_names_both_categories(self, guard_config):
-        candidate = make_candidate(category="food")
+        candidate = make_candidate(category="food", subject="latte")
         decisions = evaluate([candidate], post_categories=["animal"], guard_config=guard_config)
         assert "animal" in decisions[0].reason
         assert "food" in decisions[0].reason

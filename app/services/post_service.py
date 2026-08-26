@@ -77,9 +77,10 @@ class PostService:
 
         post_vector = await self._ensure_post_embedding(post_id, post.title, post.body)
         ranked_candidates = await self.matching_service.get_ranked_candidates(post_vector)
-        post_category = await self.matching_service.infer_post_category(post_vector)
+        post_categories = await self.matching_service.infer_post_category(post_vector)
+        post_subjects = await self.matching_service.infer_post_subjects(post_vector)
 
-        decisions = evaluate(ranked_candidates, post_category, self.guard_config)
+        decisions = evaluate(ranked_candidates, post_categories, self.guard_config, post_subjects)
 
         for d in decisions:
             await self.suggestion_repo.create(
