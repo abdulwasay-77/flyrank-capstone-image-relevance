@@ -105,6 +105,7 @@ Edit `.env` and fill in:
 GEMINI_API_KEY=your_real_key_here
 DATABASE_URL=your_real_neon_connection_string_here
 UNSPLASH_ACCESS_KEY=your_real_unsplash_key_here   # only needed to re-run scripts/seed_corpus.py
+MAX_BUDGET_USD=1.00                               # project-wide AI spend circuit breaker
 ```
 
 (An Unsplash key is only required if you want to re-download the image
@@ -214,7 +215,11 @@ instead.
   `source: MANUAL_OVERRIDE`, never edits or hides the guard's original
   verdict.
 - **Every AI API call is cost-logged**, success or failure, including
-  retries — visible via `GET /costs/summary`.
+  retries — visible via `GET /costs/summary`. Before each paid call, the
+  project-wide `MAX_BUDGET_USD` cap is checked against all logged spend. Once
+  reached, no further AI call is made: classification jobs finish as
+  `failed`, and a first-time `GET /posts/{id}/suggestions` returns `503` with
+  the configured limit and current tracked spend.
 
 ## Known Deviations from the Original Spec
 

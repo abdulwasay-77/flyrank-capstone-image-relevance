@@ -275,3 +275,30 @@ explicit rule. One real bug the suite itself caught: `TestClient` executes
 initially tried to make a genuine (failing) database connection via the
 real background job — fixed by mocking that specific background task for
 those contract tests.
+
+---
+
+## Phase 10 — AI Cost Budget Guard
+
+### Cost tracking was passive, not a budget guard
+The project already wrote every vision and embedding call to `ai_call_log`
+and exposed aggregate spend through `GET /costs/summary`, but no code used
+that information to stop another paid request. That metering was useful for
+reporting but did not satisfy the assignment's explicit budget-cap
+requirement: a retry loop or batch bug could still continue spending
+indefinitely.
+
+**Fix**: added `MAX_BUDGET_USD` (default `$1.00`) to `Settings` and
+`.env.example`. `CostTrackerService.check_budget_ok()` aggregates the full
+durable `ai_call_log` history and raises `BudgetExceededError` before a
+`track_call()` yields control to Gemini when spend is at or over the cap.
+Putting the check in the shared async context manager protects all existing
+vision and embedding call sites without router-level or SDK-specific
+duplication. A denied call is intentionally not logged as an API call because
+no provider request occurred.
+
+The batch job now stops queued workers after this exception and stores its
+partial counts with `status="failed"`; the suggestions route translates it
+to `503 Service Unavailable` and states both the configured limit and current
+spend. Automated coverage was added in `tests/test_budget_guard.py` for
+under-cap and at/over-cap checks, failed batch status, and the 503 response.

@@ -29,6 +29,7 @@ from app.db.models import BatchJob, Image
 from app.db.session import AsyncSessionLocal
 from app.repositories.image_repository import ImageRepository
 from app.services.embedding_service import EmbeddingService
+from app.services.cost_tracker_service import BudgetExceededError
 from app.services.vision_service import VisionClassificationFailed, VisionService
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -51,7 +52,12 @@ MIME_TYPES = {
 }
 
 
-async def _classify_one(image_id: uuid.UUID, filename: str, semaphore: asyncio.Semaphore) -> str:
+async def _classify_one(
+    image_id: uuid.UUID,
+    filename: str,
+    semaphore: asyncio.Semaphore,
+    budget_exhausted: asyncio.Event,
+) -> str:
     """
     Classifies a single image in its own database session. Returns
     one of "succeeded", "flagged", or "failed" — never raises, so one
@@ -59,6 +65,11 @@ async def _classify_one(image_id: uuid.UUID, filename: str, semaphore: asyncio.S
     of the batch (§11.4).
     """
     async with semaphore:
+        # Tasks are created up front but wait behind the bounded semaphore.
+        # Once one worker hits the circuit breaker, queued workers exit before
+        # starting any more paid work.
+        if budget_exhausted.is_set():
+            return "skipped"
         file_path = IMAGES_DIR / filename
         if not file_path.exists():
             return "failed"
@@ -70,6 +81,9 @@ async def _classify_one(image_id: uuid.UUID, filename: str, semaphore: asyncio.S
             vision = VisionService(db)
             try:
                 tags = await vision.classify_image(image_id, image_bytes, mime_type)
+            except BudgetExceededError:
+                budget_exhausted.set()
+                return "budget_exceeded"
             except VisionClassificationFailed:
                 return "failed"
             except Exception:
@@ -90,6 +104,9 @@ async def _classify_one(image_id: uuid.UUID, filename: str, semaphore: asyncio.S
             # mechanism, or by re-running this job with force=true).
             try:
                 await EmbeddingService(db).embed_image(image_id, tags.caption)
+            except BudgetExceededError:
+                budget_exhausted.set()
+                return "budget_exceeded"
             except Exception:
                 pass
 
@@ -115,8 +132,9 @@ async def run_classification_job(job_id: uuid.UUID, force: bool = False) -> None
         images: list[Image] = await repo.list_unclassified(force=force)
 
     semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
+    budget_exhausted = asyncio.Event()
     results = await asyncio.gather(
-        *[_classify_one(img.id, img.filename, semaphore) for img in images]
+        *[_classify_one(img.id, img.filename, semaphore, budget_exhausted) for img in images]
     )
 
     succeeded = sum(1 for r in results if r == "succeeded")
@@ -126,7 +144,7 @@ async def run_classification_job(job_id: uuid.UUID, force: bool = False) -> None
     async with AsyncSessionLocal() as db:
         job = await db.get(BatchJob, job_id)
         if job is not None:
-            job.status = "completed"
+            job.status = "failed" if budget_exhausted.is_set() else "completed"
             job.succeeded_items = succeeded + flagged  # flagged images still succeeded classification
             job.failed_items = failed
             job.flagged_items = flagged

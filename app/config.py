@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     CONFIDENCE_FLAG_THRESHOLD: float = Field(default=0.60, ge=0.0, le=1.0)
     MAX_RETRIES: int = Field(default=3, ge=0)
 
+    # --- AI Cost Safety ---
+    # Project-wide ceiling across all durable ai_call_log rows. A positive
+    # default keeps a runaway retry/batch loop from spending without bound.
+    MAX_BUDGET_USD: float = Field(default=1.00, gt=0.0)
+
     # --- App ---
     APP_ENV: str = "development"
     LOG_LEVEL: str = "INFO"

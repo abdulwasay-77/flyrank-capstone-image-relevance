@@ -13,6 +13,7 @@ from app.db.session import get_db
 from app.schemas.api_models import OverrideRequest, PostOut, PostSuggestionsOut, SuggestionOut
 from app.services.post_service import PostNotFoundError, PostService
 from app.services.review_service import ReviewService
+from app.services.cost_tracker_service import BudgetExceededError
 
 router = APIRouter(prefix="/posts", tags=["posts"])
 
@@ -68,6 +69,14 @@ async def get_post_suggestions(post_id: uuid.UUID, db: AsyncSession = Depends(ge
         )
     except PostNotFoundError:
         raise HTTPException(status_code=404, detail=f"Post {post_id} not found")
+    except BudgetExceededError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "AI cost budget cap reached; suggestion generation is temporarily unavailable. "
+                f"Configured limit: ${exc.limit_usd:.2f}; current spend: ${exc.current_spend_usd:.6f}."
+            ),
+        )
     except asyncio.TimeoutError:
         raise HTTPException(
             status_code=504,

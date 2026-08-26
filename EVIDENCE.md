@@ -72,6 +72,17 @@ development history — it includes the `gemini-3.6-flash` free-tier quota
 exhaustion incident before the switch to `gemini-3.5-flash-lite` (see
 `BUILDLOG.md`), correctly logged rather than hidden.
 
+### ☑ Project-wide AI budget cap actively stops paid work
+
+`CostTrackerService.check_budget_ok()` runs before every existing
+`track_call()` block, so both vision and embedding calls are protected by the
+same `MAX_BUDGET_USD` circuit breaker. `tests/test_budget_guard.py` covers
+calls under the cap and calls at or above it raising
+`BudgetExceededError`; it also covers the batch job recording `status: failed`
+and the suggestions endpoint returns a clear `503` containing the configured
+limit and tracked spend. Denied calls are not logged as API calls because they
+were never sent to Gemini.
+
 ---
 
 ## Matching System

@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.db.models import AICallLog
 
 # USD per 1,000,000 tokens. (input, output) — embeddings have no
@@ -52,9 +53,37 @@ def estimate_cost_usd(model_name: str, input_tokens: int, output_tokens: int = 0
     return (input_tokens / 1_000_000) * rates["input"] + (output_tokens / 1_000_000) * rates["output"]
 
 
+class BudgetExceededError(Exception):
+    """Raised before an AI call when the project-wide spend cap is exhausted."""
+
+    def __init__(self, *, limit_usd: float, current_spend_usd: float):
+        self.limit_usd = limit_usd
+        self.current_spend_usd = current_spend_usd
+        super().__init__(
+            f"AI budget cap of ${limit_usd:.2f} reached "
+            f"(current tracked spend: ${current_spend_usd:.6f})"
+        )
+
+
 class CostTrackerService:
     def __init__(self, db: AsyncSession):
         self.db = db
+        self.settings = get_settings()
+
+    async def check_budget_ok(self) -> None:
+        """Allow an AI call only while cumulative tracked spend is below the cap.
+
+        The comparison intentionally covers the complete ai_call_log history,
+        not a request or date window, so this remains a project-wide circuit
+        breaker even if a buggy batch is restarted repeatedly.
+        """
+        summary = await self.get_summary()
+        current_spend = summary["total_cost_usd"]
+        if current_spend >= self.settings.MAX_BUDGET_USD:
+            raise BudgetExceededError(
+                limit_usd=self.settings.MAX_BUDGET_USD,
+                current_spend_usd=current_spend,
+            )
 
     async def log_call(
         self,
@@ -123,6 +152,9 @@ class CostTrackerService:
         the failure-path log entry (usually 0/0, which is fine —
         estimate_cost_usd(0, 0) = 0.0).
         """
+        # Deliberately before the timed/logged block: a denied call was never
+        # sent to Gemini, so it must not be recorded as an AI API call.
+        await self.check_budget_ok()
         ctx: dict = {"input_tokens": 0, "output_tokens": 0}
         start = time.monotonic()
         try:
